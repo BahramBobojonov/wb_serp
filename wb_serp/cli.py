@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,8 +14,10 @@ from .batch import current_batch
 from .client import CurlClient, parse_curl_template
 from .config import load_queries
 from .input_file import create_drive_session, download_drive_file, materialize_curl_file
-from .pipeline import CollectionBlocked, collect, write_outputs
+from .pipeline import CollectionBlocked, CollectionTimedOut, collect, write_outputs
 from .postgres import PostgresStore
+from .retry_state import clear as clear_retry_state
+from .retry_state import curl_hash, is_complete, mark_blocked, should_defer
 from .state import load_page
 
 
@@ -35,7 +38,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--pages", type=int, default=_env_int("WB_PAGES", 2))
     parser.add_argument("--dest", default=os.getenv("WB_DEST", "-5818883"))
     parser.add_argument("--dest-label", default=os.getenv("WB_DEST_LABEL", "main"))
-    parser.add_argument("--sleep-seconds", type=float, default=_env_float("WB_SLEEP_SECONDS", 6.0))
+    parser.add_argument("--sleep-seconds", type=float, default=_env_float("WB_SLEEP_SECONDS", 0.0))
     parser.add_argument("--query-limit", type=int, default=_env_int("WB_QUERY_LIMIT", 0))
     parser.add_argument("--check-config", action="store_true")
     return parser.parse_args(argv)
@@ -80,52 +83,68 @@ def main(
         print("DATABASE_URL is required", file=sys.stderr)
         return 5
 
+    store = store_factory(database_url)
+    lease = store.acquire_collector_lease()
+    if lease is None:
+        print("another collector invocation is active; skipping")
+        return 0
+
     curl_path = Path(args.curl_file)
-    drive_file_id = os.getenv("GOOGLE_DRIVE_CURL_FILE_ID", "").strip()
-    if drive_file_id:
-        print("refreshing curl from private Google Drive file")
-        session = create_drive_session(os.getenv("GOOGLE_CREDENTIALS_B64", ""))
-        curl_path = download_drive_file(curl_path, drive_file_id, session)
-    else:
-        curl_path = materialize_curl_file(curl_path, os.getenv("WB_CURL_B64", ""))
-    if not curl_path.exists():
-        print(f"curl file not found: {curl_path}", file=sys.stderr)
-        return 3
     run_root = Path(args.data_dir) / "runs" / batch.batch_id
     run_root.mkdir(parents=True, exist_ok=True)
-    client = client_factory(curl_path)
-    pages_completed_before = _completed_pages(run_root, queries, args.pages)
-    attempt_started_at = (now or datetime.now(UTC)).astimezone(UTC)
-    attempt_id = uuid4()
-    errors: list[dict] = []
-    status = "complete"
-    exit_code = 0
+    if is_complete(run_root):
+        print(f"batch {batch.batch_id} is already complete; skipping")
+        store.release_collector_lease(lease)
+        return 0
+    drive_file_id = os.getenv("GOOGLE_DRIVE_CURL_FILE_ID", "").strip()
     try:
-        errors = collect(
-            client,
-            queries,
-            run_root,
-            pages=args.pages,
-            dest=args.dest,
-            dest_label=args.dest_label,
-            sleep_seconds=args.sleep_seconds,
+        if drive_file_id:
+            print("refreshing curl from private Google Drive file")
+            session = create_drive_session(os.getenv("GOOGLE_CREDENTIALS_B64", ""))
+            curl_path = download_drive_file(curl_path, drive_file_id, session)
+        else:
+            curl_path = materialize_curl_file(curl_path, os.getenv("WB_CURL_B64", ""))
+        if not curl_path.exists():
+            print(f"curl file not found: {curl_path}", file=sys.stderr)
+            return 3
+        current_hash = curl_hash(curl_path)
+        attempt_now = (now or datetime.now(UTC)).astimezone(UTC)
+        if should_defer(run_root, current_hash, now=attempt_now, retry_after_seconds=_env_int("WB_SAME_CURL_RETRY_SECONDS", 1800)):
+            print("same curl was blocked recently; waiting for Drive refresh")
+            return 0
+        client = client_factory(curl_path)
+        pages_completed_before = _completed_pages(run_root, queries, args.pages)
+        attempt_started_at = attempt_now
+        attempt_id = uuid4()
+        errors: list[dict] = []
+        status = "complete"
+        exit_code = 0
+        try:
+            errors = collect(
+                client, queries, run_root, pages=args.pages, dest=args.dest,
+                dest_label=args.dest_label, sleep_seconds=args.sleep_seconds,
+                deadline_monotonic=time.monotonic() + _env_int("WB_MAX_RUNTIME_SECONDS", 12600),
+            )
+            if errors:
+                status = "partial"
+                exit_code = 2
+            else:
+                clear_retry_state(run_root)
+        except CollectionBlocked as exc:
+            errors = exc.errors
+            status = "blocked"
+            exit_code = 2
+            mark_blocked(run_root, current_hash, now=attempt_now)
+            print(f"collection stopped: {exc}", file=sys.stderr)
+        except CollectionTimedOut as exc:
+            status = "timed_out"
+            exit_code = 2
+            print(f"collection stopped: {exc}", file=sys.stderr)
+        rows, totals, _manifest = write_outputs(
+            run_root, queries, errors, status=status, batch=batch, dest_label=args.dest_label,
         )
-    except CollectionBlocked as exc:
-        errors = exc.errors
-        status = "blocked"
-        exit_code = 2
-        print(f"collection stopped: {exc}", file=sys.stderr)
-    rows, totals, _manifest = write_outputs(
-        run_root,
-        queries,
-        errors,
-        status=status,
-        batch=batch,
-        dest_label=args.dest_label,
-    )
-    attempt_finished_at = (now or datetime.now(UTC)).astimezone(UTC)
-    try:
-        store_factory(database_url).publish(
+        attempt_finished_at = (now or datetime.now(UTC)).astimezone(UTC)
+        store.publish(
             batch=batch,
             attempt_id=attempt_id,
             attempt_started_at=attempt_started_at,
@@ -137,11 +156,14 @@ def main(
             rows=rows,
             totals=totals,
             errors=errors,
+            retention_days=_env_int("WB_RETENTION_DAYS", 90),
         )
+        return exit_code
     except Exception as exc:
-        print(f"PostgreSQL publication failed: {exc}", file=sys.stderr)
+        print(f"collector failed: {exc}", file=sys.stderr)
         return 4
-    return exit_code
+    finally:
+        store.release_collector_lease(lease)
 
 
 if __name__ == "__main__":

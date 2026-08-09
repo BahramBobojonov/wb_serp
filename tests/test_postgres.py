@@ -12,6 +12,7 @@ class RecordingCursor:
         self.fail_on = fail_on
         self.executed: list[tuple[str, object]] = []
         self.executed_many: list[tuple[str, list[tuple]]] = []
+        self.fetchone_value = (True,)
 
     def execute(self, sql: str, params=None) -> None:
         if self.fail_on and self.fail_on in sql:
@@ -22,6 +23,9 @@ class RecordingCursor:
         if self.fail_on and self.fail_on in sql:
             raise RuntimeError("database write failed")
         self.executed_many.append((sql, list(params)))
+
+    def fetchone(self):
+        return self.fetchone_value
 
     def __enter__(self):
         return self
@@ -103,11 +107,26 @@ def test_publish_creates_schema_and_upserts_one_batch_snapshot_and_attempt() -> 
     assert "INSERT INTO serp.batches" in statements
     assert "ON CONFLICT (batch_id) DO UPDATE" in statements
     assert "INSERT INTO serp.attempts" in statements
+    assert "page_fetched_at" in statements
+    assert "DELETE FROM serp.batches" in statements
     assert "INSERT INTO serp.products" in many_statements
     assert "ON CONFLICT (batch_id, query, dest_label, page, position_on_page) DO UPDATE" in many_statements
     assert "INSERT INTO serp.query_totals" in many_statements
     assert connection.committed is True
     assert connection.rolled_back is False
+    assert connection.closed is True
+
+
+def test_collector_lease_uses_session_advisory_lock_until_release() -> None:
+    connection = RecordingConnection()
+    store = PostgresStore("postgresql://unused", connect=lambda _: connection)
+    lease = store.acquire_collector_lease()
+    assert lease is connection
+    assert connection.closed is False
+    store.release_collector_lease(lease)
+    statements = "\n".join(sql for sql, _ in connection.cursor_instance.executed)
+    assert "pg_try_advisory_lock" in statements
+    assert "pg_advisory_unlock" in statements
     assert connection.closed is True
 
 

@@ -23,6 +23,14 @@ class RecordingStore:
     def __init__(self, fail: bool = False) -> None:
         self.fail = fail
         self.published: list[dict] = []
+        self.lease_available = True
+        self.releases = 0
+
+    def acquire_collector_lease(self):
+        return object() if self.lease_available else None
+
+    def release_collector_lease(self, _lease) -> None:
+        self.releases += 1
 
     def publish(self, **kwargs) -> None:
         if self.fail:
@@ -49,7 +57,7 @@ def args(config: Path, curl_file: Path, data_dir: Path, *extra: str) -> list[str
     ]
 
 
-def test_hourly_cli_attempts_share_batch_checkpoints_and_publish_two_attempts(tmp_path: Path, monkeypatch) -> None:
+def test_completed_batch_is_a_fast_noop_without_second_client_or_attempt(tmp_path: Path, monkeypatch) -> None:
     config, curl_file, data_dir = inputs(tmp_path)
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     store = RecordingStore()
@@ -67,9 +75,9 @@ def test_hourly_cli_attempts_share_batch_checkpoints_and_publish_two_attempts(tm
     assert first == 0
     assert second == 0
     assert clients[0].calls == [("linen tulle", 1, "-5818883"), ("linen tulle", 2, "-5818883")]
-    assert clients[1].calls == []
-    assert [call["batch"].batch_id for call in store.published] == ["serp_20260810_0500", "serp_20260810_0500"]
-    assert [call["pages_completed_before"] for call in store.published] == [0, 2]
+    assert len(clients) == 1
+    assert [call["batch"].batch_id for call in store.published] == ["serp_20260810_0500"]
+    assert store.releases == 2
 
 
 def test_cli_publishes_blocked_attempt_before_returning_two(tmp_path: Path, monkeypatch) -> None:
@@ -88,6 +96,37 @@ def test_cli_publishes_blocked_attempt_before_returning_two(tmp_path: Path, monk
     assert store.published[0]["status"] == "blocked"
     assert store.published[0]["batch"].batch_id == "manual_smoke"
     assert store.published[0]["errors"][0]["status"] == 498
+
+    second = cli.main(
+        args(config, curl_file, data_dir, "--run-name", "manual_smoke"),
+        now=datetime(2026, 8, 10, 6, 5, tzinfo=ZoneInfo("Asia/Yekaterinburg")),
+        store_factory=lambda _: store,
+        client_factory=lambda _: (_ for _ in ()).throw(AssertionError("WB must not be called")),
+    )
+    assert second == 0
+    assert len(store.published) == 1
+
+
+def test_changed_curl_retries_blocked_batch_immediately(tmp_path: Path, monkeypatch) -> None:
+    config, curl_file, data_dir = inputs(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    store = RecordingStore()
+    run_args = args(config, curl_file, data_dir, "--run-name", "changed_curl")
+    now = datetime(2026, 8, 10, 6, 0, tzinfo=ZoneInfo("Asia/Yekaterinburg"))
+    assert cli.main(run_args, now=now, store_factory=lambda _: store, client_factory=lambda _: BlockedClient()) == 2
+    curl_file.write_text("fresh curl placeholder", encoding="utf-8")
+    successful = SuccessfulClient()
+    assert cli.main(run_args, now=now.replace(minute=5), store_factory=lambda _: store, client_factory=lambda _: successful) == 0
+    assert len(successful.calls) == 2
+
+
+def test_advisory_lock_skips_overlapping_invocation(tmp_path: Path, monkeypatch) -> None:
+    config, curl_file, data_dir = inputs(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    store = RecordingStore()
+    store.lease_available = False
+    assert cli.main(args(config, curl_file, data_dir), store_factory=lambda _: store) == 0
+    assert store.published == []
 
 
 def test_cli_returns_four_when_database_publication_fails(tmp_path: Path, monkeypatch) -> None:

@@ -17,10 +17,16 @@ class CollectionBlocked(RuntimeError):
         self.errors = errors
 
 
-def collect(client, queries: list[str], run_root: Path, *, pages: int, dest: str, dest_label: str, sleep_seconds: float) -> list[dict]:
+class CollectionTimedOut(RuntimeError):
+    pass
+
+
+def collect(client, queries: list[str], run_root: Path, *, pages: int, dest: str, dest_label: str, sleep_seconds: float, deadline_monotonic: float | None = None) -> list[dict]:
     errors: list[dict] = []
     for query in queries:
         for page in range(1, pages + 1):
+            if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                raise CollectionTimedOut("collection runtime limit reached")
             if load_page(run_root, query, page) is not None:
                 print(f"SKIP query={query!r} page={page}: checkpoint exists")
                 continue
@@ -56,7 +62,7 @@ def collect(client, queries: list[str], run_root: Path, *, pages: int, dest: str
                 for position, product in enumerate(products, start=1)
                 if isinstance(product, dict)
             ]
-            save_page(run_root, query, page, rows, total)
+            save_page(run_root, query, page, rows, total, fetched_at_utc=datetime.now(UTC).isoformat())
             if not products:
                 break
             if sleep_seconds:

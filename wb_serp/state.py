@@ -1,5 +1,6 @@
 import hashlib
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -9,10 +10,16 @@ def _page_path(root: Path, query: str, page: int) -> Path:
     return root / "pages" / digest / f"page_{page:03d}.json"
 
 
-def save_page(root: Path, query: str, page: int, rows: list[dict], total: Any) -> Path:
+def save_page(root: Path, query: str, page: int, rows: list[dict], total: Any, *, fetched_at_utc: str | None = None) -> Path:
     path = _page_path(root, query, page)
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"query": query, "page": page, "total": total, "rows": rows}
+    payload = {
+        "query": query,
+        "page": page,
+        "total": total,
+        "fetched_at_utc": fetched_at_utc or datetime.now(UTC).isoformat(),
+        "rows": rows,
+    }
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     temporary.replace(path)
@@ -44,7 +51,8 @@ def merge_pages(root: Path, queries: list[str]) -> tuple[list[dict], list[dict]]
             payload = load_page(root, query, page)
             if payload is None:
                 break
-            query_rows.extend(payload["rows"])
+            fetched_at = payload.get("fetched_at_utc")
+            query_rows.extend([{**row, "page_fetched_at": fetched_at} for row in payload["rows"]])
             pages.append(page)
             try:
                 totals_seen.append(int(payload.get("total") or 0))

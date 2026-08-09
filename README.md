@@ -6,11 +6,13 @@ checkpoints on a Railway volume, and persists historical batches in PostgreSQL.
 
 ## Production schedule
 
-Railway runs at minute zero every hour. With `Asia/Yekaterinburg` and anchor
+Railway checks every five minutes. With `Asia/Yekaterinburg` and anchor
 hour `5`, full market batches begin at `05:00`, `11:00`, `17:00`, and `23:00`.
 Attempts inside one window share a name such as `serp_20260810_0500`: completed
-pages are skipped and only missing pages retry. The next boundary receives a
-new batch ID and collects every YAML query again.
+pages are skipped and only missing pages retry. After a WB block, the same curl
+is not sent again for 30 minutes; a changed Drive curl resumes on the next
+five-minute tick. A PostgreSQL advisory lock prevents overlapping manual runs.
+The next boundary receives a new batch ID and collects every YAML query again.
 
 Required runtime variables:
 
@@ -22,6 +24,10 @@ WB_BATCH_TIMEZONE=Asia/Yekaterinburg
 WB_BATCH_ANCHOR_HOUR=5
 WB_PAGES=2
 WB_QUERY_LIMIT=0
+WB_SLEEP_SECONDS=0
+WB_SAME_CURL_RETRY_SECONDS=1800
+WB_MAX_RUNTIME_SECONDS=12600
+WB_RETENTION_DAYS=90
 DATABASE_URL=<sealed PostgreSQL connection URL>
 GOOGLE_DRIVE_CURL_FILE_ID=<private Drive file ID>
 GOOGLE_CREDENTIALS_B64=<base64 service-account JSON>
@@ -38,9 +44,8 @@ The collector creates and writes only the `serp` schema:
 - `serp.query_totals` — completeness and catalogue totals by query;
 - `serp.attempts` — each hourly retry and its errors.
 
-Writes are idempotent. If database publication fails, volume checkpoints remain
-and the next hourly attempt republishes them without refetching successful
-pages.
+Writes are idempotent. Detailed history older than 90 days is removed after a
+successful publication. If database publication fails, volume checkpoints remain.
 
 ## Files and resume
 
@@ -59,7 +64,7 @@ keeps every completed checkpoint.
 
 ## Private Google Drive refresh
 
-Share only `wb_curl.txt` with the service-account email. Before every hourly
+Share only `wb_curl.txt` with the service-account email. Before every eligible
 attempt Railway downloads the latest private file into `/data/input`.
 
 On Windows, `windows/install_sync_task.ps1` installs a hidden logon task that

@@ -64,10 +64,15 @@ DDL = (
         wh integer,
         view_flags bigint,
         is_advert boolean NOT NULL DEFAULT false,
+        page_fetched_at timestamptz,
         updated_at timestamptz NOT NULL DEFAULT now(),
         PRIMARY KEY (batch_id, query, dest_label, page, position_on_page)
     )
     """,
+    "ALTER TABLE serp.products ADD COLUMN IF NOT EXISTS page_fetched_at timestamptz",
+    "CREATE INDEX IF NOT EXISTS serp_products_nm_batch_idx ON serp.products (nm_id, batch_id)",
+    "CREATE INDEX IF NOT EXISTS serp_products_query_batch_idx ON serp.products (query, batch_id)",
+    "CREATE INDEX IF NOT EXISTS serp_batches_started_idx ON serp.batches (batch_started_at_utc)",
     """
     CREATE TABLE IF NOT EXISTS serp.query_totals (
         batch_id text NOT NULL REFERENCES serp.batches(batch_id) ON DELETE CASCADE,
@@ -103,7 +108,7 @@ PRODUCT_COLUMNS = (
     "nm_id", "root", "name", "brand", "brand_id", "supplier", "supplier_id",
     "subject_id", "rating", "review_rating", "feedbacks", "price_rub",
     "basic_price_rub", "discount_percent", "sizes_count", "option_ids", "colors",
-    "total_quantity", "time1", "time2", "wh", "view_flags", "is_advert",
+    "total_quantity", "time1", "time2", "wh", "view_flags", "is_advert", "page_fetched_at",
 )
 
 
@@ -171,6 +176,28 @@ class PostgresStore:
 
         return psycopg.connect(self.database_url)
 
+    def acquire_collector_lease(self, lock_key: int = 864209739) -> object | None:
+        connection = self._open()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT pg_try_advisory_lock(%s)", (lock_key,))
+                acquired = bool(cursor.fetchone()[0])
+            if acquired:
+                return connection
+        except Exception:
+            connection.close()
+            raise
+        connection.close()
+        return None
+
+    @staticmethod
+    def release_collector_lease(connection: object, lock_key: int = 864209739) -> None:
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT pg_advisory_unlock(%s)", (lock_key,))
+        finally:
+            connection.close()
+
     def publish(
         self,
         *,
@@ -185,6 +212,7 @@ class PostgresStore:
         rows: list[dict],
         totals: list[dict],
         errors: list[dict],
+        retention_days: int = 90,
     ) -> None:
         pages_completed_after = sum(int(row.get("pages_collected") or 0) for row in totals)
         connection = self._open()
@@ -214,6 +242,10 @@ class PostgresStore:
                         status, queries_expected, len(totals), pages_expected,
                         pages_completed_after, len(rows), len(errors),
                     ),
+                )
+                cursor.execute(
+                    "DELETE FROM serp.batches WHERE batch_started_at_utc < now() - (%s * interval '1 day')",
+                    (retention_days,),
                 )
                 if rows:
                     columns = ", ".join(PRODUCT_COLUMNS)
