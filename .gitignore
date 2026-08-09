@@ -1,6 +1,7 @@
 __pycache__/
 .pytest_cache/
 .venv/
+.worktrees/
 data/
 wb_curl.txt
 *.pyc
