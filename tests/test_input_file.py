@@ -15,11 +15,11 @@ def test_materialize_curl_file_from_base64_when_volume_file_missing(tmp_path: Pa
     assert target.read_bytes() == b'curl "https://example.test" -b "a=b"'
 
 
-def test_materialize_curl_file_keeps_existing_volume_file(tmp_path: Path) -> None:
+def test_materialize_curl_file_refreshes_existing_volume_file(tmp_path: Path) -> None:
     target = tmp_path / "wb_curl.txt"
     target.write_text("existing", encoding="utf-8")
     encoded = base64.b64encode(b"replacement").decode("ascii")
 
     assert hasattr(input_file, "materialize_curl_file")
     input_file.materialize_curl_file(target, encoded)
-    assert target.read_text(encoding="utf-8") == "existing"
+    assert target.read_text(encoding="utf-8") == "replacement"

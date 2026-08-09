@@ -15,8 +15,8 @@ compatible with the existing competitor and price reports.
    ```
 
    If SFTP upload is blocked, set the sealed `WB_CURL_B64` variable to the
-   Base64 content of `wb_curl.txt`. The service writes it to the Volume only
-   when `/data/input/wb_curl.txt` is absent.
+   Base64 content of `wb_curl.txt`. The service refreshes
+   `/data/input/wb_curl.txt` from this value at startup.
 
 4. Set variables:
 
