@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .client import CurlClient, parse_curl_template
 from .config import load_queries
-from .input_file import materialize_curl_file
+from .input_file import create_drive_session, download_drive_file, materialize_curl_file
 from .pipeline import CollectionBlocked, collect, write_outputs
 
 
@@ -44,7 +44,14 @@ def main() -> int:
     if args.check_config:
         return 0
 
-    curl_path = materialize_curl_file(Path(args.curl_file), os.getenv("WB_CURL_B64", ""))
+    curl_path = Path(args.curl_file)
+    drive_file_id = os.getenv("GOOGLE_DRIVE_CURL_FILE_ID", "").strip()
+    if drive_file_id:
+        print("refreshing curl from private Google Drive file")
+        session = create_drive_session(os.getenv("GOOGLE_CREDENTIALS_B64", ""))
+        curl_path = download_drive_file(curl_path, drive_file_id, session)
+    else:
+        curl_path = materialize_curl_file(curl_path, os.getenv("WB_CURL_B64", ""))
     if not curl_path.exists():
         print(f"curl file not found: {curl_path}", file=sys.stderr)
         return 3

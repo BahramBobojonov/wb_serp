@@ -46,3 +46,19 @@ python -m wb_serp.cli --config config/search_growth_focus.yaml --check-config
 Never commit `wb_curl.txt` or Google credentials. The next optional step is to
 sync the extension output folder through Google Drive and download the current
 file into `/data/input` before collection.
+
+## Private Google Drive refresh
+
+Share only the `wb_curl.txt` file with the service-account email, then set:
+
+```text
+GOOGLE_DRIVE_CURL_FILE_ID=<Drive file id>
+GOOGLE_CREDENTIALS_B64=<base64 service-account JSON>
+```
+
+When both Drive variables are configured, the service downloads the latest
+private file before resuming checkpoints. `WB_CURL_B64` remains a fallback.
+
+On Windows, `windows/install_sync_task.ps1` installs a hidden logon task that
+copies only `Downloads/wb_curl.txt` to `G:/Мой диск/WB_SERP_SYNC` whenever the
+extension refreshes it. Normal Chrome downloads are unaffected.
