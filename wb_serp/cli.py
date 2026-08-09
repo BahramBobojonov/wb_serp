@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .client import CurlClient, parse_curl_template
 from .config import load_queries
+from .input_file import materialize_curl_file
 from .pipeline import CollectionBlocked, collect, write_outputs
 
 
@@ -43,7 +44,7 @@ def main() -> int:
     if args.check_config:
         return 0
 
-    curl_path = Path(args.curl_file)
+    curl_path = materialize_curl_file(Path(args.curl_file), os.getenv("WB_CURL_B64", ""))
     if not curl_path.exists():
         print(f"curl file not found: {curl_path}", file=sys.stderr)
         return 3
