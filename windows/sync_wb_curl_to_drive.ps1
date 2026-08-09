@@ -1,6 +1,6 @@
 param(
     [string]$Source = "$env:USERPROFILE\Downloads\wb_curl.txt",
-    [string]$Destination = "G:\Мой диск\WB_SERP_SYNC\wb_curl.txt",
+    [string]$Destination = "",
     [int]$PollSeconds = 10,
     [switch]$Once
 )
@@ -12,20 +12,32 @@ function Sync-WbCurl {
         return
     }
 
-    $destinationDirectory = Split-Path -Parent $Destination
+    $targetDestination = $Destination
+    if ([string]::IsNullOrWhiteSpace($targetDestination)) {
+        $syncDirectory = Get-ChildItem -Path "G:\" -Directory -ErrorAction Stop |
+            ForEach-Object { Join-Path $_.FullName "WB_SERP_SYNC" } |
+            Where-Object { Test-Path -LiteralPath $_ -PathType Container } |
+            Select-Object -First 1
+        if (-not $syncDirectory) {
+            return
+        }
+        $targetDestination = Join-Path $syncDirectory "wb_curl.txt"
+    }
+
+    $destinationDirectory = Split-Path -Parent $targetDestination
     if (-not (Test-Path -LiteralPath $destinationDirectory -PathType Container)) {
         return
     }
 
     $sourceHash = (Get-FileHash -LiteralPath $Source -Algorithm SHA256).Hash
-    $destinationHash = if (Test-Path -LiteralPath $Destination -PathType Leaf) {
-        (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash
+    $destinationHash = if (Test-Path -LiteralPath $targetDestination -PathType Leaf) {
+        (Get-FileHash -LiteralPath $targetDestination -Algorithm SHA256).Hash
     } else {
         ""
     }
 
     if ($sourceHash -ne $destinationHash) {
-        Copy-Item -LiteralPath $Source -Destination $Destination -Force
+        Copy-Item -LiteralPath $Source -Destination $targetDestination -Force
     }
 }
 
