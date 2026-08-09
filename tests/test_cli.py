@@ -57,7 +57,7 @@ def args(config: Path, curl_file: Path, data_dir: Path, *extra: str) -> list[str
     ]
 
 
-def test_completed_batch_is_a_fast_noop_without_second_client_or_attempt(tmp_path: Path, monkeypatch) -> None:
+def test_completed_batch_is_a_fast_noop_without_second_client_or_attempt(tmp_path: Path, monkeypatch, capsys) -> None:
     config, curl_file, data_dir = inputs(tmp_path)
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     store = RecordingStore()
@@ -78,6 +78,8 @@ def test_completed_batch_is_a_fast_noop_without_second_client_or_attempt(tmp_pat
     assert len(clients) == 1
     assert [call["batch"].batch_id for call in store.published] == ["serp_20260810_0500"]
     assert store.releases == 2
+    output = capsys.readouterr().out
+    assert "PROGRESS queries_total=1 pages_completed=0/2" in output
 
 
 def test_cli_publishes_blocked_attempt_before_returning_two(tmp_path: Path, monkeypatch) -> None:

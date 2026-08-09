@@ -31,7 +31,7 @@ def fixed_batch() -> BatchWindow:
     )
 
 
-def test_collect_resumes_after_existing_page_and_writes_batch_outputs(tmp_path: Path) -> None:
+def test_collect_resumes_after_existing_page_and_writes_batch_outputs(tmp_path: Path, capsys) -> None:
     run_root = tmp_path / "run"
     save_page(
         run_root,
@@ -53,6 +53,9 @@ def test_collect_resumes_after_existing_page_and_writes_batch_outputs(tmp_path: 
     )
 
     assert fake.calls == [("query", 2, "-5818883")]
+    output = capsys.readouterr().out
+    assert "SKIP query=1/1 remaining=0 page=1/2 text='query': checkpoint exists" in output
+    assert "FETCH query=1/1 remaining=0 page=2/2 text='query'" in output
     assert errors == []
     with (run_root / "public" / "serp_products.csv").open(encoding="utf-8-sig", newline="") as source:
         csv_rows = list(csv.DictReader(source))
@@ -83,3 +86,19 @@ def test_collect_stops_on_498_without_removing_checkpoints(tmp_path: Path) -> No
         assert exc.errors[0]["status"] == 498
     else:
         raise AssertionError("498 must stop the run")
+
+
+def test_collect_logs_stable_yaml_ordinal_and_remaining_queries(tmp_path: Path, capsys) -> None:
+    pipeline.collect(
+        FakeClient(),
+        ["first", "second"],
+        tmp_path,
+        pages=1,
+        dest="-1",
+        dest_label="main",
+        sleep_seconds=0,
+    )
+
+    output = capsys.readouterr().out
+    assert "FETCH query=1/2 remaining=1 page=1/1 text='first'" in output
+    assert "FETCH query=2/2 remaining=0 page=1/1 text='second'" in output

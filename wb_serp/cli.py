@@ -114,6 +114,10 @@ def main(
             return 0
         client = client_factory(curl_path)
         pages_completed_before = _completed_pages(run_root, queries, args.pages)
+        print(
+            f"PROGRESS queries_total={len(queries)} "
+            f"pages_completed={pages_completed_before}/{len(queries) * args.pages}"
+        )
         attempt_started_at = attempt_now
         attempt_id = uuid4()
         errors: list[dict] = []

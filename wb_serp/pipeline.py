@@ -23,14 +23,20 @@ class CollectionTimedOut(RuntimeError):
 
 def collect(client, queries: list[str], run_root: Path, *, pages: int, dest: str, dest_label: str, sleep_seconds: float, deadline_monotonic: float | None = None) -> list[dict]:
     errors: list[dict] = []
-    for query in queries:
+    queries_total = len(queries)
+    for query_number, query in enumerate(queries, start=1):
+        remaining = queries_total - query_number
         for page in range(1, pages + 1):
             if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
                 raise CollectionTimedOut("collection runtime limit reached")
+            progress = (
+                f"query={query_number}/{queries_total} remaining={remaining} "
+                f"page={page}/{pages} text={query!r}"
+            )
             if load_page(run_root, query, page) is not None:
-                print(f"SKIP query={query!r} page={page}: checkpoint exists")
+                print(f"SKIP {progress}: checkpoint exists")
                 continue
-            print(f"FETCH query={query!r} page={page}")
+            print(f"FETCH {progress}")
             status, data, body = client.fetch(query, page, dest)
             if status != 200 or not isinstance(data, dict):
                 error = {
