@@ -28,3 +28,14 @@ def test_merge_pages_orders_by_query_then_page(tmp_path: Path) -> None:
         {"query": "а", "products_collected": 2, "pages_collected": 2, "total_catalog": 2},
         {"query": "б", "products_collected": 1, "pages_collected": 1, "total_catalog": 3},
     ]
+
+
+def test_merge_pages_counts_successful_empty_result_as_completed_query(tmp_path: Path) -> None:
+    state.save_page(tmp_path, "empty query", 1, [], total=0)
+
+    rows, totals = state.merge_pages(tmp_path, ["empty query"])
+
+    assert rows == []
+    assert totals == [
+        {"query": "empty query", "products_collected": 0, "pages_collected": 1, "total_catalog": 0}
+    ]

@@ -51,7 +51,7 @@ def merge_pages(root: Path, queries: list[str]) -> tuple[list[dict], list[dict]]
             except (TypeError, ValueError):
                 pass
             page += 1
-        if query_rows:
+        if pages:
             all_rows.extend(query_rows)
             totals.append(
                 {
