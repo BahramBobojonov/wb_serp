@@ -39,10 +39,15 @@ Do not set `WB_RUN_NAME` in production. It is only a manual smoke-test override.
 
 The collector creates and writes only the `serp` schema:
 
-- `serp.batches` — one row per six-hour snapshot;
-- `serp.products` — query positions, cards, and prices;
-- `serp.query_totals` — completeness and catalogue totals by query;
-- `serp.attempts` — each hourly retry and its errors.
+- `serp.batches` - one row per six-hour snapshot;
+- `serp.products` - query positions, cards, prices, and page observation time;
+- `serp.query_totals` - completeness and catalogue totals by query;
+- `serp.attempts` - each invocation that actually called WB and its errors.
+
+Completed-batch, advisory-lock, and unchanged-blocked-curl no-ops do not create
+attempt rows. The complete column dictionary, relationships, retention rules,
+and read-only SQL examples are in
+[`docs/postgresql-serp-schema.md`](docs/postgresql-serp-schema.md).
 
 Writes are idempotent. Detailed history older than 90 days is removed after a
 successful publication. If database publication fails, volume checkpoints remain.
@@ -62,14 +67,35 @@ pages/<query-hash>/page_NNN.json
 A `401`, `403`, `429`, `498`, HTML, or invalid JSON response exits non-zero and
 keeps every completed checkpoint.
 
+## Log progress
+
+An eligible collection invocation reports existing checkpoint progress before
+calling WB:
+
+```text
+PROGRESS queries_total=739 pages_completed=193/1478
+```
+
+Every page decision includes the stable one-based YAML query ordinal, remaining
+queries after that ordinal, and configured page progress:
+
+```text
+FETCH query=100/739 remaining=639 page=1/2 text='linen tulle 300x250'
+SKIP query=100/739 remaining=639 page=2/2 text='linen tulle 300x250': checkpoint exists
+```
+
+`remaining` is `queries_total - current_query_number`; it does not claim every
+earlier query succeeded. Retries preserve the ordinals and skip page checkpoints.
+
 ## Private Google Drive refresh
 
 Share only `wb_curl.txt` with the service-account email. Before every eligible
 attempt Railway downloads the latest private file into `/data/input`.
 
 On Windows, `windows/install_sync_task.ps1` installs a hidden logon task that
-copies only `Downloads/wb_curl.txt` to `G:/Мой диск/WB_SERP_SYNC` whenever the
-Chrome extension refreshes it. Normal Chrome downloads are unaffected.
+copies only `Downloads/wb_curl.txt` to the `WB_SERP_SYNC` folder discovered on
+Google Drive Desktop whenever the Chrome extension refreshes it. Normal Chrome
+downloads are unaffected.
 
 ## Smoke test
 
