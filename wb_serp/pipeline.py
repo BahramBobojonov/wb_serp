@@ -6,6 +6,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .batch import BatchWindow
 from .normalize import extract_search_payload, product_row
 from .state import load_page, merge_pages, save_page
 
@@ -78,12 +79,31 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
         writer.writerows(rows)
 
 
-def write_outputs(run_root: Path, queries: list[str], errors: list[dict], *, status: str) -> None:
+def write_outputs(
+    run_root: Path,
+    queries: list[str],
+    errors: list[dict],
+    *,
+    status: str,
+    batch: BatchWindow,
+    dest_label: str,
+) -> tuple[list[dict], list[dict], dict]:
     rows, totals = merge_pages(run_root, queries)
+    batch_fields = {
+        "batch_id": batch.batch_id,
+        "batch_started_at_local": batch.started_at_local.isoformat(),
+        "batch_started_at_utc": batch.started_at_utc.isoformat(),
+    }
+    rows = [{**batch_fields, **row} for row in rows]
+    totals = [{**batch_fields, "dest_label": dest_label, **row} for row in totals]
     _write_csv(run_root / "public" / "serp_products.csv", rows)
     _write_csv(run_root / "public" / "query_totals.csv", totals)
     _write_csv(run_root / "collection_errors.csv", errors)
     manifest = {
+        "batch_id": batch.batch_id,
+        "batch_started_at_local": batch.started_at_local.isoformat(),
+        "batch_started_at_utc": batch.started_at_utc.isoformat(),
+        "batch_timezone": batch.timezone,
         "status": status,
         "updated_at_utc": datetime.now(UTC).isoformat(),
         "queries_expected": len(queries),
@@ -92,3 +112,4 @@ def write_outputs(run_root: Path, queries: list[str], errors: list[dict], *, sta
         "errors": len(errors),
     }
     (run_root / "run_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    return rows, totals, manifest
